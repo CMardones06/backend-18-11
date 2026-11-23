@@ -1,50 +1,27 @@
-"""Pruebas E2E de la API de Pet.
 
-Usan TestClient, una base PostgreSQL real y una sesión autenticada.
-Cubren el recorrido completo: router, dependencias, servicio, repositorio
-y envelope de respuesta.
-"""
+"""Pruebas E2E de la API de Pets (enfocadas en contratos y schemas)."""
 
 from uuid import UUID, uuid4
 
 import pytest
-from sqlalchemy import select
-
-from app.pets.models import PetModel
 
 pytestmark = pytest.mark.e2e
 
 
-def create_pet(client, payload):
-    """Crea una mascota por HTTP y devuelve el contenido de `data`."""
-    response = client.post("/api/pets", json=payload)
-    assert response.status_code == 201, response.text
-    return response.json()["data"]
-
-
 @pytest.mark.parametrize(
-    ("method", "path", "payload"),
+    ("method", "suffix", "payload"),
     [
-        ("GET", "/api/pets", None),
-        ("GET", f"/api/pets/{uuid4()}", None),
-        (
-            "POST",
-            "/api/pets",
-            {
-                "name": "Firulais",
-                "species": "perro",
-                "age": 3,
-                "studentId": str(uuid4()),
-            },
-        ),
-        ("PATCH", f"/api/pets/{uuid4()}", {"name": "Nombre Nuevo"}),
-        ("DELETE", f"/api/pets/{uuid4()}", None),
+        ("GET", "", None),
+        ("POST", "", {"name": "Firulais", "species": "perro", "age": 3}),
+        ("PATCH", f"/{uuid4()}", {"name": "Michi"}),
+        ("DELETE", f"/{uuid4()}", None),
     ],
-    ids=["listar", "obtener", "crear", "actualizar", "eliminar"],
+    ids=["listar", "crear", "actualizar", "eliminar"],
 )
-def test_requires_session(client, method, path, payload):
-    """Verifica que los endpoints de Pet rechacen peticiones sin sesión."""
-    response = client.request(method, path, json=payload)
+def test_requires_session(client, method, suffix, payload):
+    """Verifica que los endpoints de Pets rechacen peticiones sin sesión con 401."""
+    url = f"/api/students/{uuid4()}/pets{suffix}"
+    response = client.request(method, url, json=payload)
 
     assert response.status_code == 401
     body = response.json()
@@ -53,9 +30,45 @@ def test_requires_session(client, method, path, payload):
     assert body["error"]
 
 
-def test_list_empty(auth_client):
-    """Verifica el listado cuando no hay mascotas."""
-    response = auth_client.get("/api/pets")
+def test_create_pet_valid_schema(auth_client, created_student, pet_payload):
+    """Verifica que POST con datos válidos responda 201 y cumpla el schema Pet."""
+    student_id = created_student["id"]
+    response = auth_client.post(
+        f"/api/students/{student_id}/pets", json=pet_payload()
+    )
+
+    assert response.status_code == 201
+    body = response.json()
+    assert body["code"] == 201
+    assert body["success"] is True
+    assert body["message"] == "Recurso creado"
+
+    data = body["data"]
+    assert UUID(data["id"])
+    assert data["studentId"] == student_id
+    assert data["name"] == "Firulais"
+    assert data["species"] == "perro"
+    assert data["age"] == 3
+    assert data["createdAt"].endswith("Z")
+    assert data["updatedAt"].endswith("Z")
+
+
+def test_create_pet_without_optional_age(auth_client, created_student, pet_payload):
+    """Verifica que crear una mascota omitiendo age responda con age None."""
+    student_id = created_student["id"]
+    payload = pet_payload()
+    payload.pop("age")
+
+    response = auth_client.post(f"/api/students/{student_id}/pets", json=payload)
+
+    assert response.status_code == 201
+    assert response.json()["data"]["age"] is None
+
+
+def test_list_empty(auth_client, created_student):
+    """Verifica el listado cuando el estudiante no tiene mascotas."""
+    student_id = created_student["id"]
+    response = auth_client.get(f"/api/students/{student_id}/pets")
 
     assert response.status_code == 200
     body = response.json()
@@ -64,53 +77,100 @@ def test_list_empty(auth_client):
     assert body["data"] == {"total": 0, "items": []}
 
 
-def test_create_pet(auth_client, pet_payload, created_student):
-    """Verifica el alta de una mascota autenticada."""
-    data = pet_payload(studentId=created_student["id"])
-    response = auth_client.post("/api/pets", json=data)
-
-    assert response.status_code == 201
-    body = response.json()
-    assert body["code"] == 201
-    assert body["success"] is True
-    assert body["message"] == "Recurso creado"
-    res_data = body["data"]
-    assert res_data["name"] == "Firulais"
-    assert res_data["species"] == "perro"
-    assert res_data["age"] == 3
-    assert UUID(res_data["id"])
-
-
-def test_get_pet_by_id(auth_client, created_pet):
-    """Verifica que GET por id devuelva la mascota creada."""
-    response = auth_client.get(f"/api/pets/{created_pet['id']}")
+def test_list_pets_schema(auth_client, created_student, created_pet):
+    """Verifica que GET devuelva el envelope con la estructura PetList."""
+    student_id = created_student["id"]
+    response = auth_client.get(f"/api/students/{student_id}/pets")
 
     assert response.status_code == 200
-    assert response.json()["data"]["id"] == created_pet["id"]
+    data = response.json()["data"]
+    assert data["total"] == 1
+    assert len(data["items"]) == 1
+    assert data["items"][0]["id"] == created_pet["id"]
 
 
-def test_update_pet(auth_client, created_pet):
-    """Verifica que PATCH actualice solo el campo enviado."""
-    response = auth_client.patch(
-        f"/api/pets/{created_pet['id']}",
-        json={"name": "Scooby"},
+def test_create_pet_validation_errors(auth_client, created_student, pet_payload):
+    """Verifica que campos inválidos devuelvan 400 con detalle por campo."""
+    student_id = created_student["id"]
+    response = auth_client.post(
+        f"/api/students/{student_id}/pets",
+        json=pet_payload(
+            name="<b>Firulais</b>",
+            species="",
+            age=101,
+        ),
+    )
+
+    assert response.status_code == 400
+    body = response.json()
+    assert body["message"] == "Error de validación"
+    errors = body["errors"]
+    assert set(errors) == {"name", "species", "age"}
+    assert "No se permiten etiquetas HTML" in errors["name"]["message"]
+    assert "no puede estar vacía" in errors["species"]["message"]
+    assert "como máximo 100" in errors["age"]["message"]
+
+
+def test_create_pet_missing_fields(auth_client, created_student):
+    """Verifica que enviar un JSON vacío devuelva 400 exigiendo name y species."""
+    student_id = created_student["id"]
+    response = auth_client.post(f"/api/students/{student_id}/pets", json={})
+
+    assert response.status_code == 400
+    errors = response.json()["errors"]
+    assert set(errors) == {"name", "species"}
+    assert "El nombre debe ser un texto" in errors["name"]["message"]
+    assert "La especie debe ser un texto" in errors["species"]["message"]
+
+
+def test_create_pet_rejects_extra_fields(auth_client, created_student, pet_payload):
+    """Verifica que un campo extra no declarado en CreatePetDto devuelva 400."""
+    student_id = created_student["id"]
+    response = auth_client.post(
+        f"/api/students/{student_id}/pets",
+        json=pet_payload(color="café"),
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"] == {}
+
+
+def test_update_pet_partial_and_validation(auth_client, created_student, created_pet):
+    """Verifica actualización parcial válida y rechazo de datos inválidos."""
+    student_id = created_student["id"]
+    pet_id = created_pet["id"]
+
+    ok_response = auth_client.patch(
+        f"/api/students/{student_id}/pets/{pet_id}",
+        json={"name": "Max"},
+    )
+
+    assert ok_response.status_code == 200
+    assert ok_response.json()["data"]["name"] == "Max"
+    assert ok_response.json()["data"]["species"] == created_pet["species"]
+
+    bad_response = auth_client.patch(
+        f"/api/students/{student_id}/pets/{pet_id}",
+        json={"age": -5},
+    )
+    assert bad_response.status_code == 400
+    assert "age" in bad_response.json()["errors"]
+
+
+def test_delete_pet(auth_client, created_student, created_pet):
+    """Verifica que DELETE elimine correctamente una mascota."""
+    student_id = created_student["id"]
+    pet_id = created_pet["id"]
+
+    response = auth_client.delete(
+        f"/api/students/{student_id}/pets/{pet_id}"
     )
 
     assert response.status_code == 200
-    body = response.json()
-    assert body["message"] == "Recurso actualizado"
-    assert body["data"]["name"] == "Scooby"
-    assert body["data"]["species"] == created_pet["species"]
+    assert response.json()["data"]["id"] == pet_id
 
-
-def test_delete_pet(auth_client, created_pet):
-    """Verifica que DELETE elimine la mascota correctamente."""
-    response = auth_client.delete(f"/api/pets/{created_pet['id']}")
-
-    assert response.status_code == 200
-    body = response.json()
-    assert body["message"] == "Recurso eliminado"
-    assert body["data"]["id"] == created_pet["id"]
-
-    get_response = auth_client.get(f"/api/pets/{created_pet['id']}")
-    assert get_response.status_code == 404
+    get_response = auth_client.get(
+        f"/api/students/{student_id}/pets"
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["data"]["total"] == 0
