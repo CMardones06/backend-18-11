@@ -1,3 +1,4 @@
+
 """Pruebas E2E de la API de Pets (enfocadas en contratos y schemas)."""
 
 from uuid import UUID, uuid4
@@ -53,7 +54,7 @@ def test_create_pet_valid_schema(auth_client, created_student, pet_payload):
 
 
 def test_create_pet_without_optional_age(auth_client, created_student, pet_payload):
-    """Verifica que crear una mascota omitiendo `age` responda 201 con `age: None`."""
+    """Verifica que crear una mascota omitiendo age responda con age None."""
     student_id = created_student["id"]
     payload = pet_payload()
     payload.pop("age")
@@ -64,8 +65,20 @@ def test_create_pet_without_optional_age(auth_client, created_student, pet_paylo
     assert response.json()["data"]["age"] is None
 
 
+def test_list_empty(auth_client, created_student):
+    """Verifica el listado cuando el estudiante no tiene mascotas."""
+    student_id = created_student["id"]
+    response = auth_client.get(f"/api/students/{student_id}/pets")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["code"] == 200
+    assert body["message"] == "Operación exitosa"
+    assert body["data"] == {"total": 0, "items": []}
+
+
 def test_list_pets_schema(auth_client, created_student, created_pet):
-    """Verifica que GET devuelva el envelope con la estructura PetList (`total`, `items`)."""
+    """Verifica que GET devuelva el envelope con la estructura PetList."""
     student_id = created_student["id"]
     response = auth_client.get(f"/api/students/{student_id}/pets")
 
@@ -77,7 +90,7 @@ def test_list_pets_schema(auth_client, created_student, created_pet):
 
 
 def test_create_pet_validation_errors(auth_client, created_student, pet_payload):
-    """Verifica que campos inválidos en CreatePetDto devuelvan 400 con detalle por campo."""
+    """Verifica que campos inválidos devuelvan 400 con detalle por campo."""
     student_id = created_student["id"]
     response = auth_client.post(
         f"/api/students/{student_id}/pets",
@@ -99,7 +112,7 @@ def test_create_pet_validation_errors(auth_client, created_student, pet_payload)
 
 
 def test_create_pet_missing_fields(auth_client, created_student):
-    """Verifica que enviar un JSON vacío devuelva 400 exigiendo `name` y `species`."""
+    """Verifica que enviar un JSON vacío devuelva 400 exigiendo name y species."""
     student_id = created_student["id"]
     response = auth_client.post(f"/api/students/{student_id}/pets", json={})
 
@@ -123,24 +136,41 @@ def test_create_pet_rejects_extra_fields(auth_client, created_student, pet_paylo
 
 
 def test_update_pet_partial_and_validation(auth_client, created_student, created_pet):
-    """Verifica actualización parcial válida y rechazo de datos inválidos en UpdatePetDto."""
+    """Verifica actualización parcial válida y rechazo de datos inválidos."""
     student_id = created_student["id"]
     pet_id = created_pet["id"]
 
-    # Actualización válida parcial
     ok_response = auth_client.patch(
         f"/api/students/{student_id}/pets/{pet_id}",
         json={"name": "Max"},
     )
-    
+
     assert ok_response.status_code == 200
     assert ok_response.json()["data"]["name"] == "Max"
     assert ok_response.json()["data"]["species"] == created_pet["species"]
 
-    # Actualización inválida (edad negativa y campo extra)
     bad_response = auth_client.patch(
         f"/api/students/{student_id}/pets/{pet_id}",
         json={"age": -5},
     )
     assert bad_response.status_code == 400
     assert "age" in bad_response.json()["errors"]
+
+
+def test_delete_pet(auth_client, created_student, created_pet):
+    """Verifica que DELETE elimine correctamente una mascota."""
+    student_id = created_student["id"]
+    pet_id = created_pet["id"]
+
+    response = auth_client.delete(
+        f"/api/students/{student_id}/pets/{pet_id}"
+    )
+
+    assert response.status_code == 200
+    assert response.json()["data"]["id"] == pet_id
+
+    get_response = auth_client.get(
+        f"/api/students/{student_id}/pets"
+    )
+    assert get_response.status_code == 200
+    assert get_response.json()["data"]["total"] == 0
