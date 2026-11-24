@@ -320,3 +320,96 @@ def test_cannot_modify_another_students_pet(
 
     assert response.status_code == 404
     assert response.json()["message"] == "Mascota no encontrada"
+
+def test_update_pet_duplicate_name_returns_409(
+    auth_client, created_student, created_pet, pet_payload
+):
+    """Verifica que PATCH devuelva 409 si se usa el nombre de otra mascota del estudiante."""
+    student_id = created_student["id"]
+
+    second_pet_resp = auth_client.post(
+        f"/api/students/{student_id}/pets",
+        json=pet_payload(name="Michi", species="gato"),
+    )
+    assert second_pet_resp.status_code == 201
+    second_pet_id = second_pet_resp.json()["data"]["id"]
+
+    response = auth_client.patch(
+        f"/api/students/{student_id}/pets/{second_pet_id}",
+        json={"name": created_pet["name"]},
+    )
+
+    assert response.status_code == 409
+
+
+def test_update_pet_keeping_same_name_returns_200(
+    auth_client, created_student, created_pet
+):
+    """Verifica que PATCH permita conservar el mismo nombre actual de la mascota."""
+    student_id = created_student["id"]
+    pet_id = created_pet["id"]
+
+    response = auth_client.patch(
+        f"/api/students/{student_id}/pets/{pet_id}",
+        json={"name": created_pet["name"], "age": 4},
+    )
+
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["name"] == created_pet["name"]
+    assert data["age"] == 4
+
+
+def test_update_pet_rejects_extra_fields(auth_client, created_student, created_pet):
+    """Verifica que PATCH rechace campos no declarados en UpdatePetDto con 400."""
+    student_id = created_student["id"]
+    pet_id = created_pet["id"]
+
+    response = auth_client.patch(
+        f"/api/students/{student_id}/pets/{pet_id}",
+        json={"color": "negro"},
+    )
+
+    assert response.status_code == 400
+    assert response.json()["errors"] == {}
+
+
+@pytest.mark.parametrize(
+    ("method", "suffix", "payload"),
+    [
+        ("POST", "", {"name": "Firulais", "species": "perro", "age": 3}),
+        ("PATCH", f"/{uuid4()}", {"name": "Max"}),
+        ("DELETE", f"/{uuid4()}", None),
+    ],
+    ids=["crear", "actualizar", "eliminar"],
+)
+def test_mutations_with_nonexistent_student_return_404(
+    auth_client, method, suffix, payload
+):
+    """Verifica que POST, PATCH y DELETE respondan 404 si el estudiante no existe."""
+    url = f"/api/students/{uuid4()}/pets{suffix}"
+    response = auth_client.request(method, url, json=payload)
+
+    assert response.status_code == 404
+    assert response.json()["message"] == "Estudiante no encontrado"
+
+
+def test_invalid_student_uuid_returns_404(auth_client):
+    """Verifica que un UUID de estudiante inválido responda 404."""
+    response = auth_client.get("/api/students/no-es-un-uuid/pets")
+
+    assert response.status_code == 404
+    assert response.json()["message"] == "Estudiante no encontrado"
+
+
+def test_delete_pet_twice_returns_404(auth_client, created_student, created_pet):
+    """Verifica que intentar eliminar una mascota ya eliminada responda 404."""
+    student_id = created_student["id"]
+    pet_id = created_pet["id"]
+
+    first_delete = auth_client.delete(f"/api/students/{student_id}/pets/{pet_id}")
+    assert first_delete.status_code == 200
+
+    second_delete = auth_client.delete(f"/api/students/{student_id}/pets/{pet_id}")
+    assert second_delete.status_code == 404
+    assert second_delete.json()["message"] == "Mascota no encontrada"
