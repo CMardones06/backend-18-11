@@ -32,7 +32,7 @@ line-length = 88
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --import-mode=importlib"
 markers = [
     "unit: pruebas unitarias sin base de datos ni HTTP",
     "e2e: pruebas HTTP de extremo a extremo con base de datos de test",
